@@ -22,8 +22,8 @@ Created on Thu Apr 13 11:36:47 2023
 import numpy as np
 import geopandas as gpd
 import rasterio
-import shapefile
-from osgeo import osr
+#import shapefile
+#from osgeo import osr
 from datetime import datetime, timedelta
 from eodal.config import get_settings
 from eodal.core.scene import SceneCollection
@@ -39,8 +39,12 @@ from scipy.interpolate import interp2d
 import json
 import re
 import requests
-import urllib
-from typing import Optional
+from rasterio.warp import reproject, calculate_default_transform
+from rasterio.io import MemoryFile
+from rasterio.merge import merge
+from rasterio.enums import Resampling
+import time
+
 
 # STAC PROTOCOL SETTINGS: set to False to use a local data archive
 Settings = get_settings()
@@ -93,51 +97,6 @@ def preprocess_sentinel2_scenes(
     ds.mask_clouds_and_shadows(inplace=True, cloud_classes=[1, 2, 3, 7, 8, 9, 10])   # MASKED BY EODAL
     
     return ds
-    
-def bbox_from_tif(fname_tif,out_base_path):
-    """
-    Generates a bounding-box shapefile form a given geotiff.
-
-    Parameters
-    ----------
-    fname_tif : String
-        Geotiff relative file path
-    out_base_path : TYPE
-        Shapefile output base path (with no extensions, since multiple related
-                                    fiels are generated)
-
-    Returns
-    -------
-    None.
-    
-    """
-    bbox_fname = out_base_path + '.shp'   
-    dataset = rasterio.open(fname_tif)
-    lef = dataset.bounds.left
-    rig = dataset.bounds.right
-    if dataset.bounds.bottom > dataset.bounds.top:
-        top = dataset.bounds.bottom
-        bot = dataset.bounds.top
-    else:
-        bot = dataset.bounds.bottom
-        top = dataset.bounds.top
-    
-    # write bbox shapefile
-    w = shapefile.Writer(bbox_fname)
-    w.field([],'C')
-    w.poly([[[lef,bot],[lef,top],[rig,top],[rig,bot]]])
-    w.record([])
-    w.close()
-    
-    # write georeferenziation file
-    esri_code = int(dataset.crs.to_string()[5:])
-    dataset = None
-    spatialRef = osr.SpatialReference()
-    spatialRef.ImportFromEPSG(esri_code)
-    spatialRef.MorphToESRI()
-    file = open(out_base_path + '.prj', 'w')
-    file.write(spatialRef.ExportToWkt())
-    file.close()
 
 def scene_to_array(sc,tx,ty):
     """
@@ -241,33 +200,107 @@ def imrisc(im,qmin=1,qmax=99):
             
     return im_out
 
+def reproject_raster(src,out_crs):
+    """
+    REPROJECT RASTER reproject a given rasterio object into a wanted CRS.
+
+    Parameters
+    ----------
+    src : rasterio.io.DatasetReader
+        rasterio dataset to reproject.
+        For a geoTiff, it can be obtained from:    
+        src = rasterio.open(file.tif,'r')
+            
+    out_crs : int
+        epgs code of the wanted output CRS
+
+    Returns
+    -------
+    dst : rasterio.io.DatasetReader
+        output rasterio dataset written in-memory (rasterio MemoryFile)
+        can be written to file with:
+        
+        out_meta = src.meta.copy()
+        with rasterio.open('out_file.tif','w', **out_meta) as out_file: 
+            out_file.write(dst.read().copy())
+            
+        out_file.close()
+
+    """
+    
+    src_crs = src.crs
+    transform, width, height = calculate_default_transform(src_crs, out_crs, src.width, src.height, *src.bounds)
+    kwargs = src.meta.copy()
+    
+    memfile = MemoryFile()
+    
+    kwargs.update({
+        #'driver':'Gtiff',
+        'crs': out_crs,
+        'transform': transform,
+        'width': width,
+        'height': height,
+        "BigTIFF" : "yes"})
+    
+    dst = memfile.open(**kwargs)
+
+          
+    for i in range(1, src.count + 1):
+        reproject(
+            source=rasterio.band(src, i),
+            destination=rasterio.band(dst, i),
+            src_transform=src.transform,
+            src_crs=src_crs,
+            dst_transform=transform,
+            dst_crs=out_crs,
+            resampling=Resampling.nearest)
+    
+    return dst
+
+
 def download_SA3D_STAC(
-        bbox_fname: str, # bbox in any crs
-        out_epgs: str, # wanted output crs EPGS code
-        out_res: str, # wanted output resolution (compatible with out crs)
+        bbox_path: str, 
+        out_crs: str, 
+        out_res: float,
+        out_path: str,
         server_url: str =  'https://data.geo.admin.ch/api/stac/v0.9/collections/ch.swisstopo.swissalti3d',
-        product_resolution: str = '2', # original product resolution can only be 0.5 or 2
+        product_res_label: str = '2'
     ):
     """
-    Returns links to tiles for a user-defined polygon from swissTopo using the
-    STAC API. The geometry needs to be provided in geographic coordinates
-    (WGS84) because the API only accepts this reference system.
+    DOWNLOAD_SA3D_STAC downloads the SwissAlti3D product for the bounding box 
+    of a given shapefile and output resolution. The projection grid will start 
+    from the lower and left box bounds. 
+    
+    Parameters
+    ----------
+    bbox_path : str
+        path to the input shapefile, it can be a .gpkg or .shp with georef files
+        in any crs
+    out_crs : int
+        epgs code of the output CRS (e.g. 4326)
+    out_res : float
+        output resolution
+    out_path : str
+        output .tif file path to create
+    server_url : str, optional
+       Swisstopo STAC server url for the product.
+       The default is 'https://data.geo.admin.ch/api/stac/v0.9/collections/ch.swisstopo.swissalti3d'.
+    product_res_label : str, optional
+        the original product comes in 0.5 or 2-m resolution. 
+        The default is '2'.
 
-    :param base_url:rl_list[0]
-        base URL of the STAC API endpoint for the swissALTI3D data. In Aug 2021 this was:
-        https://data.geo.admin.ch/api/stac/v0.9/collections/ch.swisstopo.swissalti3d
-    :param bbox_fname:str
-        bounding box file defining the spatial extent to download. Must be in geographic
-        coordinates
-    :param product_resolution:
-        spatial resolution of the DEM product (0.5 or 2 meters)
-    :returns:
-        list of URLs of all those tiles covering the bounding box specified
+    Returns
+    -------
+    None.
+    The projected DEM is written in out_path
+
     """
+    
+   
     
     # RETRIEVE TILE LINKS FOR DOWNLOAD
     
-    shp = gpd.read_file(bbox_fname).to_crs('epsg:4326')
+    shp = gpd.read_file(bbox_path).to_crs('epsg:4326') # WG84 necessary to the query
     lef = np.min(shp.bounds.minx)
     rig = np.max(shp.bounds.maxx)
     bot = np.min(shp.bounds.miny)
@@ -283,13 +316,14 @@ def download_SA3D_STAC(
         ybb = np.append(ybb,top)
     
     files = []
+    print("Querying tile links...")
     for i in range(len(xbb)-1):
         for j in range(len(ybb)-1):
             bbox_tmp = [xbb[i],ybb[j],xbb[i+1],ybb[j+1]]
             # construct bbox specification required by STAC
             bbox_expr = f'{bbox_tmp[0]},{bbox_tmp[1]},{bbox_tmp[2]},{bbox_tmp[3]}'
             # construct API GET call
-            url = base_url + '/items?bbox=' + bbox_expr
+            url = server_url + '/items?bbox=' + bbox_expr
             # send the request and check response code
             res_get = requests.get(url)
             res_get.raise_for_status()         
@@ -301,14 +335,49 @@ def download_SA3D_STAC(
                 tif_pattern = re.compile(r"^.*\.(tif)$")
                 tif_files = [tif_pattern.match(key) for key in assets.keys()]
                 tif_files =[x for x in tif_files if x is not None]
-                tif_file = [x.string if x.string.find(f'_{spatial_resolution}_') > 0 \
+                tif_file = [x.string if x.string.find(f'_{product_res_label}_') > 0 \
                             else None for x in tif_files]
                 tif_file = [x for x in tif_file if x is not None][0]
                 # get download link
                 link = assets[tif_file]['href']
                 files.append(link)
-                
-    return files
+    
+    # query_parameters = {"downloadformat": "tif"}
+    
+    # reprojects tiles in out crs
+    file_handler = []
+    iter_max = len(files)
+    t_start = time.time() # start clock
+    print("Downloading tiles...")
+    n = 0
+    for row in files:
+        n = n+1
+        src = rasterio.open(row,'r')
+        dst = reproject_raster(src,out_crs)
+        file_handler.append(dst)
+        t_end = time.time()
+        print("\r %.2f %% completed, ET %.2f minutes, ETA %.2f minutes" % (n/iter_max*100,(t_end-t_start)/60,((t_end-t_start)/60)/(n/iter_max)*(1-n/iter_max)),end="\r")
+    
+    shp = gpd.read_file(bbox_fname).to_crs(out_crs) # WG84 necessary to the query
+    lef = np.min(shp.bounds.minx)
+    rig = np.max(shp.bounds.maxx)
+    bot = np.min(shp.bounds.miny)
+    top = np.max(shp.bounds.maxy)
+    
+    print('Merging tiles...')
+    merge(datasets=file_handler, # list of dataset objects opened in 'r' mode
+    bounds=(lef, bot, rig, top), # tuple
+    nodata=0, # float
+    dtype='uint16', # dtype
+    res=out_res,
+    resampling=Resampling.nearest,
+    method='first', # strategy to combine overlapping rasters
+    dst_path=out_path # str or PathLike to save raster
+    )
+    print('Output saved in ' + out_path)
+    
+
+
 
 #%% (EDIT) READ BBOX SHAPEFILE TO USE AS GEOMETRY IN THE QUERY
 bbox_fname = "data/bbox_site2_ok.shp"
@@ -495,3 +564,13 @@ for i in range(n,n_chunks):
     n = n+1 
     np.save('data/counter.npy',n)
                  
+#%% DOWNLOAD DEM FOR THE ROI
+
+download_SA3D_STAC(
+        bbox_path = bbox_fname, # bbox in any crs
+        out_crs = 2056, # wanted output crs EPGS code
+        out_res = 10, # wanted output resolution (compatible with out crs)
+        out_path = 'prova.tif',
+        server_url = 'https://data.geo.admin.ch/api/stac/v0.9/collections/ch.swisstopo.swissalti3d',
+        product_res_label = '2' # can only be 0.5 or 2, original product resolution 
+    )

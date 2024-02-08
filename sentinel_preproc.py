@@ -94,7 +94,7 @@ plt.figure(), plt.imshow(im[:,:,0], extent=im_extent)
 
 #%% RASTERIZE THE SHAPEFILE TO SAT IMAGE GRID
 
-##%% uncomment to generate vt_rast (now present in data)
+##%% uncomment to generate vt_rast (if not present in data)
 # vt_rast=np.zeros_like(xx)
 # points = np.array((xx.flatten(), yy.flatten())).T
 # for i in range(len(vt)):
@@ -107,7 +107,7 @@ plt.figure(), plt.imshow(im[:,:,0], extent=im_extent)
 # vt_rast[np.logical_or(vt_rast==7.2,vt_rast==7.3)] = 7.1
 # np.save('data/vt_rast.npy',vt_rast)
 
-vt_rast = np.load('data/vt_rast.npy')
+#vt_rast = np.load('data/vt_rast.npy')
 
 # List of selected units
 u_list = [2,8,9,10,13,14,15,16,22] # unit list
