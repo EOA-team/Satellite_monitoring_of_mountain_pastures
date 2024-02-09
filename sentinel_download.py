@@ -570,7 +570,7 @@ download_SA3D_STAC(
         bbox_path = bbox_fname, # bbox in any crs
         out_crs = 2056, # wanted output crs EPGS code
         out_res = 10, # wanted output resolution (compatible with out crs)
-        out_path = 'prova.tif',
+        out_path = 'data/dem_merged_10m.tif',
         server_url = 'https://data.geo.admin.ch/api/stac/v0.9/collections/ch.swisstopo.swissalti3d',
         product_res_label = '2' # can only be 0.5 or 2, original product resolution 
     )
