@@ -1047,130 +1047,6 @@ for u in range(len(vt_list)):
     f.write('\\\ \n')
 f.close()
 
-#%% curve stat correlation table
-
-sun_ind = shadow==0 # sun indicator
-asp_ind = np.logical_and(aspect > alb, aspect < aub) # aspect indicator
-t_tmp = np.concatenate(ndvi_dict[time_res])[unit_ind] # time vector
-#gtime_ind = t_tmp < 213 # only growing season
-stv_name = ['g', # sog
-            's', # growth slope
-            'a1', # AUC of the 1st season half 
-            'm', # greening maximum 
-            'a2', # AUC of the 2nd season half 
-            'e' # EOS
-            ]
-
-f = open('export/SLvsGT_table.txt','w')
-
-f.write('unit & ')
-
-# header
-N = len(stv_name)
-for i in range(N):
-    for j in range(i+1,N):
-        f.write('$r_{%s,%s}$ ' % (stv_name[i],stv_name[j]))
-        if i != N-2 or j != N-1:
-            f.write('& ')
-f.write('\\\ \n')
-
-plt.figure()
-             
-for u in range(len(vt_list)):
-    
-    u_ind = unit==vt_list[u] # unit indicator        
-    f.write(verb_labels[u][3:] + ' & ') 
-    
-    sl = []
-    gt = []
-    a1 = []
-    a2 = []
-    se = []
-    m = []
-    for y in range(len(years)):
-        #year indicator
-        year_ind = year==years[y]
-        
-        #for i in range(len(elb)):
-        
-        # elevation indicator
-        #elev_ind = np.logical_and(elevation > elb[i], aspect <= eub[i])
-    
-        # COMBINE INDICATORS
-        data_ind = np.logical_and(sun_ind,asp_ind)
-        data_ind = np.logical_and(data_ind,u_ind)
-        data_ind = np.logical_and(data_ind,year_ind)
-        data_ind = np.logical_and(data_ind,excl_ind)
-        #data_ind = np.logical_and(data_ind,gtime_ind)
-        #data_ind = np.logical_and(data_ind,elev_ind)
-        
-        # select data
-        ndvi_data = ndvi[data_ind]
-        ndvi_time = t_tmp[data_ind]
-        
-        # t_list = np.unique(ndvi_time)
-        # ndvi_m = np.empty_like(t_list)*np.nan
-        # for i in range(len(t_list)):
-        #     ndvi_m[i] = np.median(ndvi_data[ndvi_time==t_list[i]])
-        
-        #ndvi_elev = elevation[data_ind]
-        #pid_list = np.unique(pid[data_ind]) # list of parcels
-        
-        # slope and sog
-        
-        if len(ndvi_data)==0:
-            continue
-
-        gt_tmp = ndt.sog(ndvi_time,ndvi_data,time_res='doy',ndvi_th=ndvi_th,pth=pth,envelope=False)
-        se_tmp = ndt.eos(ndvi_time,ndvi_data,time_res='doy',ndvi_th=ndvi_th,pth=pth,envelope=False)           
-        
-        if gt_tmp < se_tmp: # if a correct curve is detected
-            a1_tmp = ndt.auc(ndvi_time,ndvi_data,time_res='doy',envelope=False,sttt=gt_tmp,entt=213)
-            a2_tmp = ndt.auc(ndvi_time,ndvi_data,time_res='doy',envelope=False,sttt=214,entt=se_tmp)
-   
-            try:
-                sl_tmp = ndt.greening_slope(ndvi_time,ndvi_data,envelope=False,plot=False) # plot = True to inspect the curve fitting
-                m_tmp = ndt.greening_max(ndvi_time,ndvi_data,envelope=False,plot=False)
-                
-            except:
-
-                continue
-        
-        else:
-            continue
-        
-        sl.append(sl_tmp)
-        gt.append(gt_tmp)
-        a1.append(a1_tmp)
-        a2.append(a2_tmp)
-        se.append(se_tmp)
-        m.append(m_tmp)
-    
-    stv = np.vstack([sl,gt,a1,a2,se,m]).T
-    
-    for i in range(N):
-        for j in range(i+1,N): 
-            nonan_ind = np.logical_and(~np.isnan(stv[:,i]),~np.isnan(stv[:,j]))
-            Rtmp = np.corrcoef(stv[nonan_ind,i],stv[nonan_ind,j])[0,1]
-            
-            if Rtmp >= 0.6 or Rtmp <= -0.6:
-                f.write('\\bf %.2f ' % (Rtmp))
-            else:
-                f.write('%.2f ' % (Rtmp))
-            
-            if i != N-2 or j != N-1:
-                f.write('& ')
-            
-            if stv_name[i] == 'g' and stv_name[j] == 's':
-                plt.subplot(3,3,u+1)
-                plt.scatter(stv[nonan_ind,i],stv[nonan_ind,j])
-                plt.title(verb_labels[u])
-                plt.xlabel(stv_name[i])
-                plt.ylabel(stv_name[j])
-        
-    f.write('\\\ \n')
-f.close()
-
 #%% PEARSON CORRELATION WITH P-VALUE TABLE
 
 sun_ind = shadow==0 # sun indicator
@@ -1254,7 +1130,7 @@ for u in range(len(vt_list)):
         se.append(se_tmp)
         m.append(m_tmp)
     
-    stv = np.vstack([sl,gt,a1,a2,se,m]).T
+    stv = np.vstack([gt,sl,a1,a2,m,se]).T
     
     for i in range(N):
         for j in range(i+1,N): 
