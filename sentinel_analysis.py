@@ -292,8 +292,11 @@ t.set_bbox(dict(facecolor='white', alpha=1,linewidth=0))
 
 # Gompertz model
 fp,C = curve_fit(ndt.gomp,
-                  d_listm[:300],
-                  qmi[:300])
+                  d_listm[:213],
+                  qmi[:213],
+                  maxfev = 10000,
+                  bounds = ([0,50,0,0],[2,200,1,1]))
+
 gom_time = np.arange(0,213)
 gom_data = ndt.gomp(gom_time,*fp)
 plt.plot(gom_time,gom_data,'--',c='tab:orange',label="Gompertz model",linewidth=lw)
